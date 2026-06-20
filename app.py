@@ -50,6 +50,12 @@ st.markdown("""
             border-left: 4px solid #fbbf24;
             margin: 0.5rem 0;
         }
+        .vertical-line {
+            border-left: 1px solid #333333;
+            height: 100%;
+            min-height: 400px;
+            padding-left: 0.5rem;
+        }
         .insight-good {
             border-left-color: #34d399;
         }
@@ -316,7 +322,7 @@ else:
     st.info("Нет данных за выбранный период")
 
 # --- 5.3 ДВЕ КОЛОНКИ: Маркетинг + Флористы ---
-col_left, col_right = st.columns(2)
+col_left, col_divider, col_right = st.columns([5, 0.3, 5])
 
 # ЛЕВАЯ КОЛОНКА: МАРКЕТИНГ
 with col_left:
@@ -359,6 +365,9 @@ with col_left:
     else:
         st.info("Нет данных по маркетингу за выбранный период")
 
+with col_divider:
+    st.markdown('<div class="vertical-line"></div>', unsafe_allow_html=True)
+    
 # ПРАВАЯ КОЛОНКА: ФЛОРИСТЫ
 with col_right:
     st.markdown("### 👤 KPI флористов")
