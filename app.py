@@ -247,7 +247,7 @@ st.sidebar.caption("Данные из PostgreSQL (Neon.tech)")
 # ============================================================
 
 # Заголовок
-st.markdown('<p class="main-header">🌸 Bloomlytics</p>', unsafe_allow_html=True)
+st.markdown('<h1 style="font-size: 5rem; color: #ff6b9d; text-align: center; font-weight: 700;">🌸 Bloomlytics</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Сквозная аналитика цветочного магазина — от лида до прибыли</p>', unsafe_allow_html=True)
 
 # --- Загрузка данных с учётом периода ---
