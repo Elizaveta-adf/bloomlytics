@@ -83,34 +83,44 @@ def get_engine():
 engine = get_engine()
 
 # ============================================================
-# 3. ФУНКЦИИ ЗАГРУЗКИ ДАННЫХ (с кешированием)
+# 3. ФУНКЦИИ ЗАГРУЗКИ ДАННЫХ (с фильтром по периоду)
 # ============================================================
+
+def get_date_filter(days):
+    """Возвращает SQL-условие для фильтрации по дате"""
+    if days is None:
+        return ""
+    return f"AND created_at >= CURRENT_DATE - INTERVAL '{days} days'"
+
 @st.cache_data(ttl=300)
-def load_main_metrics():
-    """Загружает основные финансовые метрики"""
-    query = """
+def load_main_metrics(days=None):
+    """Загружает основные финансовые метрики с учётом периода"""
+    date_filter = get_date_filter(days)
+    query = f"""
         SELECT 
-            (SELECT SUM(total_amount) FROM orders WHERE status = 'completed') AS total_revenue,
-            (SELECT SUM(total_amount - cost_price) FROM orders WHERE status = 'completed') AS net_profit,
-            (SELECT ROUND(AVG(total_amount), 2) FROM orders WHERE status = 'completed') AS avg_check,
-            (SELECT COUNT(*) FROM orders WHERE status = 'completed') AS total_orders,
-            (SELECT ROUND(100.0 * COUNT(CASE WHEN status = 'cancelled' THEN 1 END) / COUNT(*), 2) FROM orders) AS cancellation_rate,
-            (SELECT ROUND(AVG(client_rating), 2) FROM orders WHERE status = 'completed' AND client_rating IS NOT NULL) AS avg_rating
+            (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE status = 'completed' {date_filter}) AS total_revenue,
+            (SELECT COALESCE(SUM(total_amount - cost_price), 0) FROM orders WHERE status = 'completed' {date_filter}) AS net_profit,
+            (SELECT COALESCE(ROUND(AVG(total_amount), 2), 0) FROM orders WHERE status = 'completed' {date_filter}) AS avg_check,
+            (SELECT COALESCE(COUNT(*), 0) FROM orders WHERE status = 'completed' {date_filter}) AS total_orders,
+            (SELECT ROUND(100.0 * COUNT(CASE WHEN status = 'cancelled' THEN 1 END) / NULLIF(COUNT(*), 0), 2) 
+             FROM orders WHERE created_at >= CURRENT_DATE - INTERVAL '90 days') AS cancellation_rate,
+            (SELECT COALESCE(ROUND(AVG(client_rating), 2), 0) FROM orders WHERE status = 'completed' AND client_rating IS NOT NULL {date_filter}) AS avg_rating
     """
     with engine.connect() as conn:
         return pd.read_sql(text(query), conn)
 
 @st.cache_data(ttl=300)
-def load_monthly_dynamics():
-    """Загружает динамику по месяцам"""
-    query = """
+def load_monthly_dynamics(days=None):
+    """Загружает динамику по месяцам с учётом периода"""
+    date_filter = get_date_filter(days)
+    query = f"""
         SELECT 
             DATE_TRUNC('month', created_at) AS month,
-            SUM(total_amount) AS revenue,
-            SUM(cost_price) AS cost_of_goods,
-            SUM(total_amount - cost_price) AS profit
+            COALESCE(SUM(total_amount), 0) AS revenue,
+            COALESCE(SUM(cost_price), 0) AS cost_of_goods,
+            COALESCE(SUM(total_amount - cost_price), 0) AS profit
         FROM orders
-        WHERE status = 'completed'
+        WHERE status = 'completed' {date_filter}
         GROUP BY DATE_TRUNC('month', created_at)
         ORDER BY month
     """
@@ -118,19 +128,20 @@ def load_monthly_dynamics():
         return pd.read_sql(text(query), conn)
 
 @st.cache_data(ttl=300)
-def load_marketing_metrics():
-    """Загружает маркетинговые метрики по каналам"""
-    query = """
+def load_marketing_metrics(days=None):
+    """Загружает маркетинговые метрики с учётом периода"""
+    date_filter = get_date_filter(days)
+    query = f"""
         WITH marketing_metrics AS (
             SELECT 
                 o.utm_source,
                 COUNT(DISTINCT o.order_id) AS orders_count,
-                SUM(m.cost) AS total_marketing_cost,
-                SUM(o.total_amount) AS revenue_from_channel
+                COALESCE(SUM(m.cost), 0) AS total_marketing_cost,
+                COALESCE(SUM(o.total_amount), 0) AS revenue_from_channel
             FROM orders o
             JOIN marketing_spend m ON o.utm_source = m.utm_source
                 AND DATE(o.created_at) = m.date
-            WHERE o.status = 'completed'
+            WHERE o.status = 'completed' {date_filter}
             GROUP BY o.utm_source
         )
         SELECT 
@@ -147,19 +158,20 @@ def load_marketing_metrics():
         return pd.read_sql(text(query), conn)
 
 @st.cache_data(ttl=300)
-def load_florist_kpi():
-    """Загружает KPI флористов"""
-    query = """
+def load_florist_kpi(days=None):
+    """Загружает KPI флористов с учётом периода"""
+    date_filter = get_date_filter(days)
+    query = f"""
         SELECT 
             f.name AS florist_name,
             COUNT(o.order_id) AS bouquets_made,
             ROUND(AVG(o.total_amount), 2) AS avg_bouquet_price,
             ROUND(AVG(o.assembly_time_minutes), 0) AS avg_assembly_time_min,
             ROUND(AVG(o.client_rating), 2) AS avg_rating,
-            SUM(o.total_amount) AS total_revenue
+            COALESCE(SUM(o.total_amount), 0) AS total_revenue
         FROM florists f
         JOIN orders o ON f.florist_id = o.florist_id
-        WHERE o.status = 'completed'
+        WHERE o.status = 'completed' {date_filter}
         GROUP BY f.florist_id, f.name
         ORDER BY total_revenue DESC
     """
@@ -167,15 +179,16 @@ def load_florist_kpi():
         return pd.read_sql(text(query), conn)
 
 @st.cache_data(ttl=300)
-def load_daily_dynamics():
-    """Загружает дневную динамику для графика"""
-    query = """
+def load_daily_dynamics(days=None):
+    """Загружает дневную динамику с учётом периода"""
+    date_filter = get_date_filter(days)
+    query = f"""
         SELECT 
             DATE(created_at) AS date,
-            SUM(total_amount) AS revenue,
-            SUM(cost_price) AS cost_of_goods
+            COALESCE(SUM(total_amount), 0) AS revenue,
+            COALESCE(SUM(cost_price), 0) AS cost_of_goods
         FROM orders
-        WHERE status = 'completed'
+        WHERE status = 'completed' {date_filter}
         GROUP BY DATE(created_at)
         ORDER BY date
     """
@@ -183,16 +196,17 @@ def load_daily_dynamics():
         return pd.read_sql(text(query), conn)
 
 @st.cache_data(ttl=300)
-def load_channel_summary():
-    """Загружает сводку по каналам"""
-    query = """
+def load_channel_summary(days=None):
+    """Загружает сводку по каналам с учётом периода"""
+    date_filter = get_date_filter(days)
+    query = f"""
         SELECT 
             utm_source,
             COUNT(*) AS orders_count,
-            SUM(total_amount) AS revenue,
+            COALESCE(SUM(total_amount), 0) AS revenue,
             ROUND(AVG(total_amount), 2) AS avg_check
         FROM orders
-        WHERE status = 'completed'
+        WHERE status = 'completed' {date_filter}
         GROUP BY utm_source
         ORDER BY revenue DESC
     """
@@ -207,9 +221,17 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("**Аналитика цветочного магазина**")
 st.sidebar.markdown("---")
 
-# Выбор периода (пока просто для демонстрации, в будущем можно добавить фильтр)
+# Выбор периода
 period_options = ["Последние 30 дней", "Последние 3 месяца", "Всё время"]
 selected_period = st.sidebar.selectbox("📆 Период", period_options)
+
+# Преобразуем выбор периода в количество дней
+if selected_period == "Последние 30 дней":
+    days = 30
+elif selected_period == "Последние 3 месяца":
+    days = 90
+else:  # "Всё время"
+    days = None
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**📊 Метрики**")
@@ -228,14 +250,14 @@ st.sidebar.caption("Данные из PostgreSQL (Neon.tech)")
 st.markdown('<p class="main-header">🌸 Bloomlytics</p>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Сквозная аналитика цветочного магазина — от лида до прибыли</p>', unsafe_allow_html=True)
 
-# --- Загрузка данных ---
+# --- Загрузка данных с учётом периода ---
 with st.spinner("Загрузка данных..."):
-    main_metrics = load_main_metrics()
-    monthly_data = load_monthly_dynamics()
-    marketing_data = load_marketing_metrics()
-    florist_data = load_florist_kpi()
-    daily_data = load_daily_dynamics()
-    channel_data = load_channel_summary()
+    main_metrics = load_main_metrics(days)
+    monthly_data = load_monthly_dynamics(days)
+    marketing_data = load_marketing_metrics(days)
+    florist_data = load_florist_kpi(days)
+    daily_data = load_daily_dynamics(days)
+    channel_data = load_channel_summary(days)
 
 # --- 5.1 КАРТОЧКИ С МЕТРИКАМИ ---
 st.markdown("### 📊 Ключевые показатели")
@@ -289,6 +311,8 @@ if not daily_data.empty:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     st.plotly_chart(fig1, use_container_width=True)
+else:
+    st.info("Нет данных за выбранный период")
 
 # --- 5.3 ДВЕ КОЛОНКИ: Маркетинг + Флористы ---
 col_left, col_right = st.columns(2)
@@ -297,7 +321,7 @@ col_left, col_right = st.columns(2)
 with col_left:
     st.markdown("### 📢 Маркетинговые метрики")
     
-    if not marketing_data.empty:
+    if not marketing_data.empty and marketing_data['orders_count'].sum() > 0:
         # ROAS по каналам (горизонтальные бары)
         fig2 = px.bar(
             marketing_data,
@@ -332,13 +356,13 @@ with col_left:
             use_container_width=True
         )
     else:
-        st.info("Нет данных по маркетингу")
+        st.info("Нет данных по маркетингу за выбранный период")
 
 # ПРАВАЯ КОЛОНКА: ФЛОРИСТЫ
 with col_right:
     st.markdown("### 👤 KPI флористов")
     
-    if not florist_data.empty:
+    if not florist_data.empty and florist_data['bouquets_made'].sum() > 0:
         # Таблица флористов
         st.dataframe(
             florist_data,
@@ -372,7 +396,7 @@ with col_right:
         )
         st.plotly_chart(fig3, use_container_width=True)
     else:
-        st.info("Нет данных по флористам")
+        st.info("Нет данных по флористам за выбранный период")
 
 # --- 5.4 СЕЗОННАЯ ДИНАМИКА (ПО МЕСЯЦАМ) ---
 st.markdown("---")
@@ -395,58 +419,73 @@ if not monthly_data.empty:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     st.plotly_chart(fig4, use_container_width=True)
+else:
+    st.info("Нет данных по месяцам за выбранный период")
 
 # --- 5.5 АВТОМАТИЧЕСКИЕ ИНСАЙТЫ ---
 st.markdown("---")
 st.markdown("### 🧠 Автоматические инсайты")
 
 # Функция для генерации инсайтов
-def generate_insights(main_metrics, marketing_data, florist_data, daily_data):
+def generate_insights(main_metrics, marketing_data, florist_data, daily_data, selected_period):
     insights = []
+    period_text = selected_period.lower()
     
     # 1. Финансовые инсайты
-    profit_margin = main_metrics['net_profit'].iloc[0] / main_metrics['total_revenue'].iloc[0] * 100 if main_metrics['total_revenue'].iloc[0] > 0 else 0
-    if profit_margin < 40:
-        insights.append(("⚠️ Маржинальность ниже 40%", "Проверьте себестоимость и цены на цветы", "bad"))
-    elif profit_margin > 55:
-        insights.append(("✅ Отличная маржинальность!", "Бизнес эффективен, продолжайте в том же духе", "good"))
-    else:
-        insights.append(("📊 Маржинальность в норме", "Держите текущий уровень цен и себестоимости", "good"))
+    total_revenue = main_metrics['total_revenue'].iloc[0] if not main_metrics.empty else 0
+    net_profit = main_metrics['net_profit'].iloc[0] if not main_metrics.empty else 0
+    
+    if total_revenue > 0:
+        profit_margin = (net_profit / total_revenue) * 100
+        if profit_margin < 40:
+            insights.append(("⚠️ Маржинальность ниже 40%", 
+                           f"За {period_text} маржинальность = {profit_margin:.1f}%. Проверьте себестоимость и цены на цветы", "bad"))
+        elif profit_margin > 55:
+            insights.append(("✅ Отличная маржинальность!", 
+                           f"За {period_text} маржинальность = {profit_margin:.1f}%. Бизнес эффективен!", "good"))
+        else:
+            insights.append(("📊 Маржинальность в норме", 
+                           f"За {period_text} маржинальность = {profit_margin:.1f}%", "good"))
     
     # 2. Маркетинговые инсайты
-    if not marketing_data.empty:
+    if not marketing_data.empty and marketing_data['orders_count'].sum() > 0:
         best_channel = marketing_data.loc[marketing_data['roas'].idxmax()]
         if best_channel['roas'] > 3:
             insights.append((f"🚀 Лучший канал: {best_channel['utm_source']}", 
-                           f"ROAS = {best_channel['roas']:.1f} — вкладывайте сюда больше!", "good"))
+                           f"ROAS = {best_channel['roas']:.1f} за {period_text} — вкладывайте сюда больше!", "good"))
         
         worst_channel = marketing_data.loc[marketing_data['roas'].idxmin()]
-        if worst_channel['roas'] < 1:
+        if worst_channel['roas'] < 1 and worst_channel['total_marketing_cost'] > 0:
             insights.append((f"⚠️ Худший канал: {worst_channel['utm_source']}", 
-                           f"ROAS = {worst_channel['roas']:.1f} — рассмотрите отключение", "bad"))
+                           f"ROAS = {worst_channel['roas']:.1f} за {period_text} — рассмотрите отключение", "bad"))
     
     # 3. Инсайты по флористам
-    if not florist_data.empty:
+    if not florist_data.empty and florist_data['bouquets_made'].sum() > 0:
         best_florist = florist_data.loc[florist_data['total_revenue'].idxmax()]
         insights.append((f"🏆 Лучший флорист: {best_florist['florist_name']}", 
-                       f"Принёс {best_florist['total_revenue']:,.0f} ₽ — премируйте!", "good"))
+                       f"Принёс {best_florist['total_revenue']:,.0f} ₽ за {period_text} — премируйте!", "good"))
         
         # Проверка на медленную сборку
         slow_florists = florist_data[florist_data['avg_assembly_time_min'] > 45]
         for _, row in slow_florists.iterrows():
             insights.append((f"🐌 Медленный флорист: {row['florist_name']}", 
-                           f"Среднее время сборки {row['avg_assembly_time_min']:.0f} мин — оптимизируйте процесс", "bad"))
+                           f"Среднее время сборки {row['avg_assembly_time_min']:.0f} мин за {period_text} — оптимизируйте процесс", "bad"))
     
     # 4. Сезонный инсайт
-    if not daily_data.empty:
-        # Находим пиковый день
+    if not daily_data.empty and len(daily_data) > 0:
         peak_day = daily_data.loc[daily_data['revenue'].idxmax()]
-        insights.append((f"📈 Пик продаж: {peak_day['date']}", 
-                       f"Выручка {peak_day['revenue']:,.0f} ₽ — готовьтесь к таким дням заранее", "good"))
+        if peak_day['revenue'] > 0:
+            insights.append((f"📈 Пик продаж: {peak_day['date']}", 
+                           f"Выручка {peak_day['revenue']:,.0f} ₽ — готовьтесь к таким дням заранее", "good"))
+    
+    # Если инсайтов мало, добавляем общий
+    if len(insights) < 3:
+        insights.append(("💡 Совет", 
+                       f"За {period_text} бизнес работает стабильно. Продолжайте мониторить метрики", "good"))
     
     return insights
 
-insights = generate_insights(main_metrics, marketing_data, florist_data, daily_data)
+insights = generate_insights(main_metrics, marketing_data, florist_data, daily_data, selected_period)
 
 # Отображаем инсайты
 for title, description, insight_type in insights:
