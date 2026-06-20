@@ -25,7 +25,7 @@ st.markdown("""
             color: #ffffff;
         }
         .main-header {
-            font-size: 2.5rem;
+            font-size: 4rem;
             font-weight: 700;
             color: #ff6b9d;
             margin-bottom: 0.2rem;
